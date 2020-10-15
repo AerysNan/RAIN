@@ -2,11 +2,12 @@ package rs
 
 import (
 	"errors"
-	"fmt"
+	"rain/util"
+	"sync"
 )
 
 var (
-	parameters = []byte{
+	table = []byte{
 		0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000,
 		0b00100000, 0b01000000, 0b10000000, 0b00011101, 0b00111010,
 		0b01110100, 0b11101000, 0b11001101, 0b10000111, 0b00010011,
@@ -59,6 +60,7 @@ var (
 		0b11101001, 0b11001111, 0b10000011, 0b00011011, 0b00110110,
 		0b01101100, 0b11011000, 0b10101101, 0b01000111, 0b10001110,
 	}
+	generator                  = int16(0b100011011)
 	errDataShardNumberIllegal  = errors.New("illegal data shard number")
 	errDataShardLimitExceeded  = errors.New("data shard limit exceeded")
 	errDataShardNumberMismatch = errors.New("mismatch between data provided and pre-defined data shard number")
@@ -66,7 +68,6 @@ var (
 
 type ReedSolomon struct {
 	dataShard int
-	generator int16
 }
 
 func New(dataShard int, generator int16) (*ReedSolomon, error) {
@@ -78,7 +79,6 @@ func New(dataShard int, generator int16) (*ReedSolomon, error) {
 	}
 	return &ReedSolomon{
 		dataShard: dataShard,
-		generator: generator,
 	}, nil
 }
 
@@ -95,40 +95,122 @@ func (rs *ReedSolomon) Split(content []byte) [][]byte {
 	return result
 }
 
-func (rs *ReedSolomon) Multiply(x byte, y byte) byte {
-	m, n, v, mask := int16(x), int16(y), int16(0), int16(1)
-	for i := 0; i < 8; i++ {
-		if (mask & m) > 0 {
-			v = v ^ n
-		}
-		n <<= 1
-		mask <<= 1
-	}
-	fmt.Println(v)
-	degree := 15
-	for ; degree > 0; degree-- {
-		if (v & (1 << degree)) > 0 {
-			break
-		}
-	}
-	fmt.Println(degree)
-	mask = int16(1 << degree)
-	for i := degree; i >= 8; i-- {
-		if (mask & v) > 0 {
-			v ^= rs.generator << (i - 8)
-			fmt.Println(v)
-		}
-		mask >>= 1
-	}
-	return byte(v)
-}
-
 func (rs *ReedSolomon) Encode(dataShards [][]byte) ([]byte, []byte, error) {
 	if len(dataShards) != rs.dataShard {
 		return nil, nil, errDataShardNumberMismatch
 	}
+	pShard, err := rs.ComputePShard(dataShards)
+	if err != nil {
+		return nil, nil, err
+	}
+	qShard, err := rs.ComputeQShard(dataShards)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pShard, qShard, nil
+}
+
+func (rs *ReedSolomon) ComputePShard(dataShards [][]byte) ([]byte, error) {
+	if len(dataShards) != rs.dataShard {
+		return nil, errDataShardNumberMismatch
+	}
 	bytesPerShard := len(dataShards[0])
-	PShard := make([]byte, bytesPerShard)
-	QShard := make([]byte, bytesPerShard)
-	return PShard, QShard, nil
+	pShard := make([]byte, bytesPerShard)
+	waitGroup := sync.WaitGroup{}
+	waitGroup.Add(bytesPerShard)
+	for j := 0; j < bytesPerShard; j++ {
+		go func(j int) {
+			defer waitGroup.Done()
+			for i := range dataShards {
+				pShard[j] ^= dataShards[i][j]
+			}
+		}(j)
+	}
+	waitGroup.Wait()
+	return pShard, nil
+}
+
+func (rs *ReedSolomon) ComputeQShard(dataShards [][]byte) ([]byte, error) {
+	if len(dataShards) != rs.dataShard {
+		return nil, errDataShardNumberMismatch
+	}
+	bytesPerShard := len(dataShards[0])
+	qShard := make([]byte, bytesPerShard)
+	waitGroup := sync.WaitGroup{}
+	waitGroup.Add(bytesPerShard)
+	for j := 0; j < bytesPerShard; j++ {
+		go func(j int) {
+			defer waitGroup.Done()
+			for i := range dataShards {
+				qShard[j] ^= util.FiniteFieldMuiltiply(dataShards[i][j], table[i], generator)
+			}
+		}(j)
+	}
+	waitGroup.Wait()
+	return qShard, nil
+}
+
+func (rs *ReedSolomon) RecoverOneShardWithPShard(dataShards [][]byte, pShard []byte, missingIndex int) error {
+	if len(dataShards) != rs.dataShard {
+		return errDataShardNumberMismatch
+	}
+	bytesPerShard := len(dataShards[0])
+	waitGroup := sync.WaitGroup{}
+	waitGroup.Add(bytesPerShard)
+	for j := 0; j < bytesPerShard; j++ {
+		go func(j int) {
+			defer waitGroup.Done()
+			dataShards[missingIndex][j] = pShard[j]
+			for i := range dataShards {
+				if i == missingIndex {
+					continue
+				}
+				dataShards[missingIndex][j] ^= dataShards[i][j]
+			}
+		}(j)
+	}
+	waitGroup.Wait()
+	return nil
+}
+
+func (rs *ReedSolomon) RecoverOneShardWithQShard(dataShards [][]byte, qShard []byte, x int) error {
+	if len(dataShards) != rs.dataShard {
+		return errDataShardNumberMismatch
+	}
+	bytesPerShard := len(dataShards[0])
+	qxShard, err := rs.ComputeQShard(dataShards)
+	if err != nil {
+		return err
+	}
+	waitGroup := sync.WaitGroup{}
+	waitGroup.Add(bytesPerShard)
+	for j := 0; j < bytesPerShard; j++ {
+		go func(j int) {
+			defer waitGroup.Done()
+			dataShards[x][j] = util.FiniteFieldMuiltiply(qShard[j]^qxShard[j], table[255-x], generator)
+		}(j)
+	}
+	waitGroup.Wait()
+	return nil
+}
+
+func (rs *ReedSolomon) RecoverTwoShards(dataShards [][]byte, pShard []byte, qShard []byte, x int, y int) error {
+	if len(dataShards) != rs.dataShard {
+		return errDataShardNumberMismatch
+	}
+	bytesPerShard := len(dataShards)
+	pxyShard, err := rs.ComputePShard(dataShards)
+	if err != nil {
+		return err
+	}
+	qxyShard, err := rs.ComputeQShard(dataShards)
+	if err != nil {
+		return err
+	}
+	for j := 0; j < bytesPerShard; j++ {
+		go func(j int) {
+			dataShards[x][j] = util.FiniteFieldMuiltiply(table[255-x], qShard[j]^qxyShard[j], generator) + util.FiniteFieldMuiltiply(table[y-x], pShard[j]^pxyShard[j], generator)
+		}(j)
+	}
+	return nil
 }

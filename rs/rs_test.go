@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 	"os"
+	"rain/util"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,7 +19,6 @@ func TestFiniteFieldMultiply(t *testing.T) {
 	}
 	defer file.Close()
 	reader := bufio.NewReader(file)
-	encoder, err := New(6, 0b100011011)
 	if err != nil {
 		t.Error("Create encoder failed")
 		return
@@ -48,7 +48,7 @@ func TestFiniteFieldMultiply(t *testing.T) {
 			t.Error("Test file format invalid")
 			return
 		}
-		if encoder.Multiply(byte(x), byte(y)) != byte(z) {
+		if util.FiniteFieldMuiltiply(byte(x), byte(y), 0b100011011) != byte(z) {
 			t.Error("Failed! Result different from pyfinite")
 		}
 	}
