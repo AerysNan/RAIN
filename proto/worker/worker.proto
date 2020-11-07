@@ -1,0 +1,23 @@
+syntax = "proto3";
+option go_package = ".;pw";
+
+service WorkerForManager {
+  rpc Put(PutRequest) returns (PutResponse) {}
+  rpc Get(GetRequest) returns (GetResponse) {}
+}
+
+message PutRequest {
+  string value = 1;
+}
+
+message PutResponse {
+  int64 offset = 1;
+}
+
+message GetRequest {
+  int64 offset = 1;
+}
+
+message GetResponse {
+ string value = 1;
+}

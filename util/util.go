@@ -32,5 +32,5 @@ func FiniteFieldDivide(x int16, y int16) (byte, byte) {
 }
 
 func FiniteFieldInvert(x byte, generator int16) byte {
-
+	return 0
 }

@@ -70,7 +70,7 @@ type ReedSolomon struct {
 	dataShard int
 }
 
-func New(dataShard int, generator int16) (*ReedSolomon, error) {
+func New(dataShard int) (*ReedSolomon, error) {
 	if dataShard > 255 {
 		return nil, errDataShardLimitExceeded
 	}
