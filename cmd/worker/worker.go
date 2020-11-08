@@ -12,7 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type Worker struct {
+type worker struct {
 	pw.WorkerForManagerServer
 
 	client    pm.ManagerForWorkerClient
@@ -22,8 +22,8 @@ type Worker struct {
 	blocksize int
 }
 
-func New(client pm.ManagerForWorkerClient, local string) *Worker {
-	worker := &Worker{
+func new(client pm.ManagerForWorkerClient, local string) *worker {
+	w := &worker{
 		client:    client,
 		local:     local,
 		blocksize: 100,
@@ -31,11 +31,11 @@ func New(client pm.ManagerForWorkerClient, local string) *Worker {
 	}
 	path := fmt.Sprintf("data/%s", local)
 	_ = os.Mkdir(path, os.ModePerm)
-	go worker.SendHeartbeat()
-	return worker
+	go w.SendHeartbeat()
+	return w
 }
 
-func (w *Worker) SendHeartbeat() {
+func (w *worker) SendHeartbeat() {
 	timer := time.NewTicker(time.Second)
 	for {
 		response, err := w.client.Heartbeat(context.Background(), &pm.HeartbeatRequest{
@@ -52,7 +52,7 @@ func (w *Worker) SendHeartbeat() {
 	}
 }
 
-func (w *Worker) Put(ctx context.Context, request *pw.PutRequest) (*pw.PutResponse, error) {
+func (w *worker) Put(ctx context.Context, request *pw.PutRequest) (*pw.PutResponse, error) {
 	logrus.WithField("size", len(request.Value)).Info("Receive put request")
 	header := make([]byte, 8)
 	binary.LittleEndian.PutUint64(header, uint64(len(request.Value)))
@@ -101,7 +101,7 @@ func (w *Worker) Put(ctx context.Context, request *pw.PutRequest) (*pw.PutRespon
 	}, nil
 }
 
-func (w *Worker) Get(ctx context.Context, request *pw.GetRequest) (*pw.GetResponse, error) {
+func (w *worker) Get(ctx context.Context, request *pw.GetRequest) (*pw.GetResponse, error) {
 	offset := int(request.Offset)
 	size, err := w.ReadHeader(offset)
 	if err != nil {
@@ -150,7 +150,7 @@ func (w *Worker) Get(ctx context.Context, request *pw.GetRequest) (*pw.GetRespon
 	}, nil
 }
 
-func (w *Worker) ReadHeader(offset int) (int, error) {
+func (w *worker) ReadHeader(offset int) (int, error) {
 	currentBlock, blockOffset := offset/w.blocksize, offset%w.blocksize
 	file, err := os.Open(fmt.Sprintf("data/%s/%d", w.local, currentBlock))
 	defer file.Close()

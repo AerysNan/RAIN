@@ -1,17 +1,21 @@
 package rs
 
 import (
+	"math/rand"
 	"rain/util"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type MultiplyTestCast struct {
 	x, y, xy byte
 }
 
-func TestFiniteFieldMultiply(t *testing.T) {
-	t.Log("Running test TestFiniteFieldMultiply")
-	cases := []MultiplyTestCast{
+var (
+	dataShard = 4
+	cases     = []MultiplyTestCast{
 		{x: 103, y: 226, xy: 121},
 		{x: 116, y: 158, xy: 167},
 		{x: 242, y: 188, xy: 91},
@@ -113,9 +117,90 @@ func TestFiniteFieldMultiply(t *testing.T) {
 		{x: 87, y: 214, xy: 202},
 		{x: 137, y: 28, xy: 126},
 	}
+)
+
+func TestFiniteFieldMultiply(t *testing.T) {
+	// to get the same result as pyfinite, we need to use primitive polynomial=283
+	t.Log("Running test TestFiniteFieldMultiply")
 	for _, c := range cases {
-		if util.FiniteFieldMuiltiply(c.x, c.y, 0b100011011) != c.xy {
-			t.Error("Failed! Result different from pyfinite")
-		}
+		assert.Equal(t, util.FiniteFieldMultiply(c.x, c.y, 0b100011011), c.xy, "Mulplication result should be the sane as pyfinite")
 	}
+}
+
+func TestFiniteFieldInvert(t *testing.T) {
+	for _, c := range cases {
+		x := c.x
+		yInv1 := util.FiniteFieldInvert(int16(c.y), 0b100011011, true)  // iterative calculation
+		yInv2 := util.FiniteFieldInvert(int16(c.y), 0b100011011, false) // recursive calculation
+		assert.Equal(t, yInv1, yInv2, "Iterative and recursive calculation of inverse should be the same")
+		assert.Equal(t, util.FiniteFieldMultiply(c.y, byte(yInv1), 0b100011011), byte(1), "Product of a number and its inverse should be 1")
+		assert.Equal(t, util.FiniteFieldMultiply(c.xy, byte(yInv1), 0b100011011), x, "x = (x . y) . 1 / y")
+	}
+}
+
+func TestRecoverOneShardWithPShard(t *testing.T) {
+	rs, err := New(dataShard)
+	assert.NoError(t, err, "Creating encoder should succeed")
+	length := rand.Intn(1000) + 1000
+	bytes := make([]byte, length)
+	_, err = rand.Read(bytes)
+	assert.NoError(t, err, "Creating random bytes should succeed")
+	dataShards := rs.Split([]byte(bytes))
+	pShard, _, err := rs.Encode(dataShards)
+	assert.NoError(t, err, "Computing P shard should succeed")
+	rand.Seed(time.Now().UnixNano())
+	index := rand.Intn(len(dataShards))
+	dataShards[index] = nil
+	err = rs.recoverOneShardWithPShard(dataShards, pShard, index)
+	assert.NoError(t, err, "Recovering one shard with P shard should succeed")
+	reconstructed := rs.Merge(dataShards)[:length]
+	assert.Equal(t, bytes, reconstructed, "Recovered data should be the same as original data")
+}
+
+func TestRecoverOneShardWithQShard(t *testing.T) {
+	rs, err := New(dataShard)
+	assert.NoError(t, err, "Creating encoder should succeed")
+	length := rand.Intn(1000) + 1000
+	bytes := make([]byte, length)
+	_, err = rand.Read(bytes)
+	assert.NoError(t, err, "Creating random bytes should succeed")
+	dataShards := rs.Split([]byte(bytes))
+	_, qShard, err := rs.Encode(dataShards)
+	assert.NoError(t, err, "Computing Q shard should succeed")
+	rand.Seed(time.Now().UnixNano())
+	index := rand.Intn(len(dataShards))
+	dataShards[index] = nil
+	err = rs.recoverOneShardWithQShard(dataShards, qShard, index)
+	assert.NoError(t, err, "Recovering one shard with Q shard should succeed")
+	reconstructed := rs.Merge(dataShards)[:length]
+	assert.Equal(t, bytes, reconstructed, "Recovered data should be the same as original data")
+}
+
+func TestRecoverTwoShards(t *testing.T) {
+	rs, err := New(dataShard)
+	assert.NoError(t, err, "Creating encoder should succeed")
+	length := rand.Intn(1000) + 1000
+	bytes := make([]byte, length)
+	_, err = rand.Read(bytes)
+	assert.NoError(t, err, "Creating random bytes should succeed")
+	dataShards := rs.Split([]byte(bytes))
+	pShard, qShard, err := rs.Encode(dataShards)
+	assert.NoError(t, err, "Computing P shard and Q shard should succeed")
+	rand.Seed(time.Now().UnixNano())
+	index1 := rand.Intn(len(dataShards))
+	dataShards[index1] = nil
+	index2 := index1
+	for index2 == index1 {
+		index2 = rand.Intn(len(dataShards))
+	}
+	dataShards[index1] = nil
+	dataShards[index2] = nil
+	if index2 > index1 {
+		err = rs.recoverTwoShards(dataShards, pShard, qShard, index1, index2)
+	} else {
+		err = rs.recoverTwoShards(dataShards, pShard, qShard, index2, index1)
+	}
+	assert.NoError(t, err, "Recovering two shards should succeed")
+	reconstructed := rs.Merge(dataShards)[:length]
+	assert.Equal(t, bytes, reconstructed, "Recovered data should be the same as original data")
 }

@@ -10,4 +10,4 @@ bin:
 	cd cmd/worker && go build -o ../../build/worker
 
 clean:
-	rm -r build/data/*
+	rm -rf build/data/*

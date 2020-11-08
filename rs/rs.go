@@ -60,17 +60,24 @@ var (
 		0b11101001, 0b11001111, 0b10000011, 0b00011011, 0b00110110,
 		0b01101100, 0b11011000, 0b10101101, 0b01000111, 0b10001110,
 	}
-	generator                  = int16(0b100011011)
+	// The very last element in the table accounts for the case when x=0,
+	// since 255-x => 255-0 => 255 index value will exceed the original table size (unless we add 0b00000001)
+	// The above table can be derived by using the primitive polynomial (pp=285)
+	// Reference for the generator value: https://www.pclviewer.com/rs2/galois.html
+	generator                  = int16(0b100011101)
 	errDataCorrupted           = errors.New("data corrupted")
 	errDataShardNumberIllegal  = errors.New("illegal data shard number")
 	errDataShardLimitExceeded  = errors.New("data shard limit exceeded")
 	errDataShardNumberMismatch = errors.New("mismatch between data provided and pre-defined data shard number")
 )
 
+// ReedSolomon is a encoder type
 type ReedSolomon struct {
-	dataShard int
+	dataShard     int
+	bytesPerShard int
 }
 
+// New return a ReedSolomon encoder
 func New(dataShard int) (*ReedSolomon, error) {
 	if dataShard > 255 {
 		return nil, errDataShardLimitExceeded
@@ -79,13 +86,16 @@ func New(dataShard int) (*ReedSolomon, error) {
 		return nil, errDataShardNumberIllegal
 	}
 	return &ReedSolomon{
-		dataShard: dataShard,
+		dataShard:     dataShard,
+		bytesPerShard: 0,
 	}, nil
 }
 
+// Split change a slice into a full data matrix
 func (rs *ReedSolomon) Split(content []byte) [][]byte {
 	size := len(content)
 	bytesPerShard := (size + rs.dataShard - 1) / rs.dataShard
+	rs.bytesPerShard = bytesPerShard
 	result := make([][]byte, rs.dataShard)
 	for i := 0; i < rs.dataShard-1; i++ {
 		result[i] = make([]byte, bytesPerShard)
@@ -96,6 +106,7 @@ func (rs *ReedSolomon) Split(content []byte) [][]byte {
 	return result
 }
 
+// Merge change a full data matrix to a slice
 func (rs *ReedSolomon) Merge(matrix [][]byte) []byte {
 	m := len(matrix[0])
 	result := make([]byte, len(matrix)*m)
@@ -105,26 +116,97 @@ func (rs *ReedSolomon) Merge(matrix [][]byte) []byte {
 	return result
 }
 
+// Encode return P shard and Q shard from a full data matrix
 func (rs *ReedSolomon) Encode(dataShards [][]byte) ([]byte, []byte, error) {
 	if len(dataShards) != rs.dataShard {
 		return nil, nil, errDataShardNumberMismatch
 	}
-	pShard, err := rs.ComputePShard(dataShards)
+	pShard, err := rs.computePShard(dataShards)
 	if err != nil {
 		return nil, nil, err
 	}
-	qShard, err := rs.ComputeQShard(dataShards)
+	qShard, err := rs.computeQShard(dataShards)
 	if err != nil {
 		return nil, nil, err
 	}
 	return pShard, qShard, nil
 }
 
-func (rs *ReedSolomon) ComputePShard(dataShards [][]byte) ([]byte, error) {
+// Recover return recovered data matrix with P shard and Q shard
+func (rs *ReedSolomon) Recover(dataShards [][]byte, PShard []byte, QShard []byte) ([]byte, []byte, error) {
+	indices := make([]int, 0)
+	for i := 0; i < rs.dataShard; i++ {
+		if dataShards[i] == nil {
+			indices = append(indices, i)
+		}
+	}
+	var err error
+	var recoverP, recoverQ []byte
+	switch len(indices) {
+	case 0:
+		// no data shards lost
+		// P shard lost
+		if PShard == nil {
+			if recoverP, err = rs.computePShard(dataShards); err != nil {
+				return nil, nil, err
+			}
+		}
+		// Q shard lost
+		if QShard == nil {
+			if recoverQ, err = rs.computePShard(dataShards); err != nil {
+				return nil, nil, err
+			}
+		}
+		return recoverP, recoverQ, nil
+	case 1:
+		// 1 data shard lost
+		if PShard == nil && QShard == nil {
+			// both P and Q shard lost
+			return nil, nil, errDataCorrupted
+		}
+		if PShard == nil {
+			// P shard lost
+			// recover data shard
+			if err = rs.recoverOneShardWithQShard(dataShards, QShard, indices[0]); err != nil {
+				return nil, nil, err
+			}
+			// recover P shard
+			if recoverP, err = rs.computePShard(dataShards); err != nil {
+				return nil, nil, err
+			}
+		} else {
+			// P shard not lost
+			// recover data shard
+			if err = rs.recoverOneShardWithPShard(dataShards, PShard, indices[0]); err != nil {
+				return nil, nil, err
+			}
+			if QShard == nil {
+				// Q shard lost
+				// recover Q shard
+				if recoverQ, err = rs.computeQShard(dataShards); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+	case 2:
+		// 2 data shards lost
+		if PShard == nil || QShard == nil {
+			// P shard or Q shard lost
+			return nil, nil, errDataCorrupted
+		}
+		if err = rs.recoverTwoShards(dataShards, PShard, QShard, indices[0], indices[1]); err != nil {
+			return nil, nil, err
+		}
+	default:
+	}
+	return recoverP, recoverQ, nil
+}
+
+func (rs *ReedSolomon) computePShard(dataShards [][]byte) ([]byte, error) {
 	if len(dataShards) != rs.dataShard {
 		return nil, errDataShardNumberMismatch
 	}
-	bytesPerShard := len(dataShards[0])
+	bytesPerShard := rs.bytesPerShard
 	pShard := make([]byte, bytesPerShard)
 	waitGroup := sync.WaitGroup{}
 	waitGroup.Add(bytesPerShard)
@@ -140,11 +222,11 @@ func (rs *ReedSolomon) ComputePShard(dataShards [][]byte) ([]byte, error) {
 	return pShard, nil
 }
 
-func (rs *ReedSolomon) ComputeQShard(dataShards [][]byte) ([]byte, error) {
+func (rs *ReedSolomon) computeQShard(dataShards [][]byte) ([]byte, error) {
 	if len(dataShards) != rs.dataShard {
 		return nil, errDataShardNumberMismatch
 	}
-	bytesPerShard := len(dataShards[0])
+	bytesPerShard := rs.bytesPerShard
 	qShard := make([]byte, bytesPerShard)
 	waitGroup := sync.WaitGroup{}
 	waitGroup.Add(bytesPerShard)
@@ -152,7 +234,7 @@ func (rs *ReedSolomon) ComputeQShard(dataShards [][]byte) ([]byte, error) {
 		go func(j int) {
 			defer waitGroup.Done()
 			for i := range dataShards {
-				qShard[j] ^= util.FiniteFieldMuiltiply(dataShards[i][j], table[i], generator)
+				qShard[j] ^= util.FiniteFieldMultiply(dataShards[i][j], table[i], generator)
 			}
 		}(j)
 	}
@@ -160,76 +242,7 @@ func (rs *ReedSolomon) ComputeQShard(dataShards [][]byte) ([]byte, error) {
 	return qShard, nil
 }
 
-func (rs *ReedSolomon) Recover(dataShards [][]byte, PShard []byte, QShard []byte) ([]byte, []byte, error) {
-	indices := make([]int, 0)
-	for i := 0; i < rs.dataShard; i++ {
-		if dataShards[i] == nil {
-			indices = append(indices, i)
-		}
-	}
-	var err error
-	var recoverP, recoverQ []byte
-	switch len(indices) {
-	case 0:
-		// no data shards lost
-		// P shard lost
-		if PShard == nil {
-			if recoverP, err = rs.ComputePShard(dataShards); err != nil {
-				return nil, nil, err
-			}
-		}
-		// Q shard lost
-		if QShard == nil {
-			if recoverQ, err = rs.ComputePShard(dataShards); err != nil {
-				return nil, nil, err
-			}
-		}
-		return recoverP, recoverQ, nil
-	case 1:
-		// 1 data shard lost
-		if PShard == nil && QShard == nil {
-			// both P and Q shard lost
-			return nil, nil, errDataCorrupted
-		}
-		if PShard == nil {
-			// P shard lost
-			// recover data shard
-			if err = rs.RecoverOneShardWithQShard(dataShards, QShard, indices[0]); err != nil {
-				return nil, nil, err
-			}
-			// recover P shard
-			if recoverP, err = rs.ComputePShard(dataShards); err != nil {
-				return nil, nil, err
-			}
-		} else {
-			// P shard not lost
-			// recover data shard
-			if err = rs.RecoverOneShardWithPShard(dataShards, PShard, indices[0]); err != nil {
-				return nil, nil, err
-			}
-			if QShard == nil {
-				// Q shard lost
-				// recover Q shard
-				if recoverQ, err = rs.ComputeQShard(dataShards); err != nil {
-					return nil, nil, err
-				}
-			}
-		}
-	case 2:
-		// 2 data shards lost
-		if PShard == nil || QShard == nil {
-			// P shard or Q shard lost
-			return nil, nil, errDataCorrupted
-		}
-		if err = rs.RecoverTwoShards(dataShards, PShard, QShard, indices[0], indices[1]); err != nil {
-			return nil, nil, err
-		}
-	default:
-	}
-	return recoverP, recoverQ, nil
-}
-
-func (rs *ReedSolomon) RecoverOneShardWithPShard(dataShards [][]byte, pShard []byte, x int) error {
+func (rs *ReedSolomon) recoverOneShardWithPShard(dataShards [][]byte, pShard []byte, x int) error {
 	if len(dataShards) != rs.dataShard {
 		return errDataShardNumberMismatch
 	}
@@ -253,13 +266,13 @@ func (rs *ReedSolomon) RecoverOneShardWithPShard(dataShards [][]byte, pShard []b
 	return nil
 }
 
-func (rs *ReedSolomon) RecoverOneShardWithQShard(dataShards [][]byte, qShard []byte, x int) error {
+func (rs *ReedSolomon) recoverOneShardWithQShard(dataShards [][]byte, qShard []byte, x int) error {
 	if len(dataShards) != rs.dataShard {
 		return errDataShardNumberMismatch
 	}
 	bytesPerShard := len(qShard)
 	dataShards[x] = make([]byte, bytesPerShard)
-	qxShard, err := rs.ComputeQShard(dataShards)
+	qxShard, err := rs.computeQShard(dataShards)
 	if err != nil {
 		return err
 	}
@@ -268,30 +281,41 @@ func (rs *ReedSolomon) RecoverOneShardWithQShard(dataShards [][]byte, qShard []b
 	for j := 0; j < bytesPerShard; j++ {
 		go func(j int) {
 			defer waitGroup.Done()
-			dataShards[x][j] = util.FiniteFieldMuiltiply(qShard[j]^qxShard[j], table[(255-x)%255], generator)
+			dataShards[x][j] = util.FiniteFieldMultiply(qShard[j]^qxShard[j], table[(255-x)%255], generator)
 		}(j)
 	}
 	waitGroup.Wait()
 	return nil
 }
 
-func (rs *ReedSolomon) RecoverTwoShards(dataShards [][]byte, pShard []byte, qShard []byte, x int, y int) error {
+func (rs *ReedSolomon) recoverTwoShards(dataShards [][]byte, pShard []byte, qShard []byte, x int, y int) error {
 	if len(dataShards) != rs.dataShard {
 		return errDataShardNumberMismatch
 	}
-	bytesPerShard := len(dataShards)
-	pxyShard, err := rs.ComputePShard(dataShards)
+	bytesPerShard := rs.bytesPerShard
+	dataShards[x] = make([]byte, bytesPerShard) // replacing with zero values
+	dataShards[y] = make([]byte, bytesPerShard) // replacing with zero values
+	pxyShard, err := rs.computePShard(dataShards)
 	if err != nil {
 		return err
 	}
-	qxyShard, err := rs.ComputeQShard(dataShards)
+	qxyShard, err := rs.computeQShard(dataShards)
 	if err != nil {
 		return err
 	}
+	waitGroup := sync.WaitGroup{}
+	waitGroup.Add(bytesPerShard)
 	for j := 0; j < bytesPerShard; j++ {
 		go func(j int) {
-			dataShards[x][j] = util.FiniteFieldMuiltiply(table[255-x], qShard[j]^qxyShard[j], generator) + util.FiniteFieldMuiltiply(table[y-x], pShard[j]^pxyShard[j], generator)
+			defer waitGroup.Done()
+			invTerm1 := util.FiniteFieldInvert(int16(table[(y-x)%255]^1), generator, true)
+			factorA := util.FiniteFieldMultiply(table[(y-x)%255], byte(invTerm1), generator)
+			invTerm2 := util.FiniteFieldInvert(int16(table[(y-x)%255]^1), generator, true)
+			factorB := util.FiniteFieldMultiply(table[(255-x)%255], byte(invTerm2), generator)
+			dataShards[x][j] = util.FiniteFieldMultiply(factorA, pShard[j]^pxyShard[j], generator) ^ util.FiniteFieldMultiply(factorB, qShard[j]^qxyShard[j], generator)
+			dataShards[y][j] = pShard[j] ^ pxyShard[j] ^ dataShards[x][j]
 		}(j)
 	}
+	waitGroup.Wait()
 	return nil
 }

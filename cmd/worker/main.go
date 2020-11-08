@@ -31,7 +31,7 @@ func main() {
 	}
 	defer connection.Close()
 	client := pm.NewManagerForWorkerClient(connection)
-	pw.RegisterWorkerForManagerServer(server, New(client, fmt.Sprintf("%s:%s", *local, *port)))
+	pw.RegisterWorkerForManagerServer(server, new(client, fmt.Sprintf("%s:%s", *local, *port)))
 
 	logrus.WithField("address", listenAddress).Info("Server started")
 	if err = server.Serve(listen); err != nil {
