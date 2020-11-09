@@ -6,14 +6,23 @@ import (
 	pw "rain/proto/worker"
 
 	"rain/rs"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Manager struct {
 	pm.ManagerForClientServer
 	pm.ManagerForWorkerServer
 
+	id      int64
 	encoder *rs.ReedSolomon
-	clients []pw.WorkerForManagerClient
+	files   map[string]File
+	clients map[int64]pw.WorkerForManagerClient
+}
+
+type File struct {
+	id      int64
+	offsets []int64
 }
 
 func New(dataShard int) (*Manager, error) {
@@ -22,10 +31,10 @@ func New(dataShard int) (*Manager, error) {
 		return nil, err
 	}
 	return &Manager{
+		id:      0,
 		encoder: rs,
-		clients: make([]pw.WorkerForManagerClient, 0),
+		clients: make(map[int64]pw.WorkerForManagerClient, 0),
 	}, nil
-
 }
 
 func (m *Manager) Write(ctx context.Context, request *pm.WriteRequest) (*pm.WriteResponse, error) {
@@ -37,5 +46,6 @@ func (m *Manager) Read(ctx context.Context, request *pm.ReadRequest) (*pm.ReadRe
 }
 
 func (m *Manager) Heartbeat(ctx context.Context, request *pm.HeartbeatRequest) (*pm.HeartbeatResponse, error) {
+	logrus.Info("Receive heartbeat")
 	return &pm.HeartbeatResponse{}, nil
 }

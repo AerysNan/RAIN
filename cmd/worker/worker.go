@@ -4,16 +4,33 @@ import (
 	"context"
 	pm "rain/proto/manager"
 	pw "rain/proto/worker"
+	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Worker struct {
 	pw.WorkerForManagerServer
 	client pm.ManagerForWorkerClient
+	index  int64
 }
 
 func New(client pm.ManagerForWorkerClient) *Worker {
-	return &Worker{
+	worker := &Worker{
 		client: client,
+	}
+	go worker.SendHeartbeat()
+	return worker
+}
+
+func (w *Worker) SendHeartbeat() {
+	timer := time.NewTicker(time.Second)
+	for {
+		<-timer.C
+		_, err := w.client.Heartbeat(context.Background(), &pm.HeartbeatRequest{})
+		if err != nil {
+			logrus.WithError(err).Error("Send heartbeat failed")
+		}
 	}
 }
 
