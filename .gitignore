@@ -1,3 +1,4 @@
 __pycache__/
 ffield.lut.8
-*.in
+build/
+*.pb.go
