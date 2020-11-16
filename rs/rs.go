@@ -95,6 +95,15 @@ func (rs *ReedSolomon) Split(content []byte) [][]byte {
 	return result
 }
 
+func (rs *ReedSolomon) Merge(matrix [][]byte) []byte {
+	m := len(matrix[0])
+	result := make([]byte, len(matrix)*m)
+	for i, line := range matrix {
+		copy(result[i*m:(i+1)*m], line)
+	}
+	return result
+}
+
 func (rs *ReedSolomon) Encode(dataShards [][]byte) ([]byte, []byte, error) {
 	if len(dataShards) != rs.dataShard {
 		return nil, nil, errDataShardNumberMismatch

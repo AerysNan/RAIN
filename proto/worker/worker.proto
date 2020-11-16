@@ -7,7 +7,7 @@ service WorkerForManager {
 }
 
 message PutRequest {
-  string value = 1;
+  bytes value = 1;
 }
 
 message PutResponse {
@@ -19,5 +19,5 @@ message GetRequest {
 }
 
 message GetResponse {
- string value = 1;
+ bytes value = 1;
 }

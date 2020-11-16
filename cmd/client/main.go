@@ -21,7 +21,7 @@ var (
 
 	readFile         = app.Command("read", "Read file")
 	readFileFlagKey  = readFile.Flag("key", "File key").Short('k').Required().String()
-	readFileFlagName = readFile.Flag("path", "File name").Short('n').Required().String()
+	readFileFlagName = readFile.Flag("path", "File name").Short('p').Required().String()
 )
 
 func main() {
@@ -48,7 +48,7 @@ func main() {
 		}
 		_, err = client.Write(context.Background(), &pm.WriteRequest{
 			Key:   *writeFileFlagKey,
-			Value: string(content),
+			Value: content,
 		})
 		if err != nil {
 			logrus.WithError(err).Fatal("Write input file to remote failed")

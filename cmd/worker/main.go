@@ -12,6 +12,7 @@ import (
 )
 
 var (
+	local   = kingpin.Flag("local", "Local address").Short('l').Default("127.0.0.1").String()
 	address = kingpin.Flag("address", "Address of manager server").Short('a').Default("127.0.0.1:8080").String()
 	port    = kingpin.Flag("port", "Listen port of worker server").Short('p').Default("8081").String()
 )
@@ -30,7 +31,7 @@ func main() {
 	}
 	defer connection.Close()
 	client := pm.NewManagerForWorkerClient(connection)
-	pw.RegisterWorkerForManagerServer(server, New(client))
+	pw.RegisterWorkerForManagerServer(server, New(client, fmt.Sprintf("%s:%s", *local, *port)))
 
 	logrus.WithField("address", listenAddress).Info("Server started")
 	if err = server.Serve(listen); err != nil {
