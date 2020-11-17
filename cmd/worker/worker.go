@@ -38,16 +38,17 @@ func New(client pm.ManagerForWorkerClient, local string) *Worker {
 func (w *Worker) SendHeartbeat() {
 	timer := time.NewTicker(time.Second)
 	for {
-		<-timer.C
 		response, err := w.client.Heartbeat(context.Background(), &pm.HeartbeatRequest{
 			Address: w.local,
 			Id:      int64(w.id),
 		})
 		if err != nil {
 			logrus.WithError(err).Error("Send heartbeat failed")
+			<-timer.C
 			continue
 		}
 		w.id = int(response.Id)
+		<-timer.C
 	}
 }
 
@@ -55,38 +56,45 @@ func (w *Worker) Put(ctx context.Context, request *pw.PutRequest) (*pw.PutRespon
 	logrus.WithField("size", len(request.Value)).Info("Receive put request")
 	header := make([]byte, 8)
 	binary.LittleEndian.PutUint64(header, uint64(len(request.Value)))
-	offset, currentBlock, value := w.size, w.size/w.blocksize, append(header, request.Value...)
+	currentSize, offset := w.size, w.size
+	if request.Offset >= 0 {
+		currentSize = int(request.Offset)
+	}
+	currentBlock, value := currentSize/w.blocksize, append(header, request.Value...)
 	for {
-		remain := (currentBlock+1)*w.blocksize - w.size
-		if remain > len(value) {
+		remain := (currentBlock+1)*w.blocksize - currentSize
+		if remain >= len(value) {
 			break
 		}
-		file, err := os.OpenFile(fmt.Sprintf("data/%s/%d", w.local, currentBlock), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0777)
+		file, err := os.OpenFile(fmt.Sprintf("data/%s/%d", w.local, currentBlock), os.O_CREATE|os.O_WRONLY, 0777)
 		defer file.Close()
 		if err != nil {
 			logrus.WithError(err).Error("Open file to write failed")
 			return nil, err
 		}
-		_, err = file.Write(value[:remain])
+		_, err = file.WriteAt(value[:remain], int64(w.blocksize-remain))
 		if err != nil {
 			logrus.WithError(err).Error("Open file to write failed")
 			return nil, err
 		}
 		value = value[remain:]
-		w.size += remain
+		currentSize += remain
 		currentBlock++
 	}
-	file, err := os.OpenFile(fmt.Sprintf("data/%s/%d", w.local, currentBlock), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0777)
+	file, err := os.OpenFile(fmt.Sprintf("data/%s/%d", w.local, currentBlock), os.O_CREATE|os.O_WRONLY, 0777)
 	defer file.Close()
 	if err != nil {
 		logrus.WithError(err).Error("Open file to write failed")
 		return nil, err
 	}
+	currentSize += len(value)
 	_, err = file.Write(value)
-	w.size += len(value)
 	if err != nil {
 		logrus.WithError(err).Error("Write file failed")
 		return nil, err
+	}
+	if request.Offset < 0 {
+		w.size = currentSize
 	}
 	return &pw.PutResponse{
 		Offset: int64(offset),
@@ -154,14 +162,14 @@ func (w *Worker) ReadHeader(offset int) (int, error) {
 	if w.blocksize-blockOffset >= 8 {
 		_, err = file.ReadAt(header, int64(blockOffset))
 		if err != nil {
-			logrus.WithError(err).Error("Read file failed")
+			logrus.WithError(err).Error("Read file header failed")
 			return -1, err
 		}
 	} else {
 		firstChunk := make([]byte, w.blocksize-blockOffset)
 		_, err = file.ReadAt(firstChunk, int64(blockOffset))
 		if err != nil {
-			logrus.WithError(err).Error("Read file failed")
+			logrus.WithError(err).Error("Read file header failed")
 			return -1, err
 		}
 		currentBlock++

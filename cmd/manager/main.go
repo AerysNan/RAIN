@@ -22,7 +22,7 @@ func main() {
 	if err != nil {
 		logrus.WithError(err).Fatal("Listen port failed")
 	}
-	manager, err := New(*shard)
+	manager, err := new(*shard)
 	if err != nil {
 		logrus.WithError(err).Fatal("Create manager server failed")
 	}
