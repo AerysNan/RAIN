@@ -73,8 +73,7 @@ var (
 
 // ReedSolomon is a encoder type
 type ReedSolomon struct {
-	dataShard     int
-	bytesPerShard int
+	dataShard int
 }
 
 // New return a ReedSolomon encoder
@@ -86,8 +85,7 @@ func New(dataShard int) (*ReedSolomon, error) {
 		return nil, errDataShardNumberIllegal
 	}
 	return &ReedSolomon{
-		dataShard:     dataShard,
-		bytesPerShard: 0,
+		dataShard: dataShard,
 	}, nil
 }
 
@@ -95,7 +93,6 @@ func New(dataShard int) (*ReedSolomon, error) {
 func (rs *ReedSolomon) Split(content []byte) [][]byte {
 	size := len(content)
 	bytesPerShard := (size + rs.dataShard - 1) / rs.dataShard
-	rs.bytesPerShard = bytesPerShard
 	result := make([][]byte, rs.dataShard)
 	for i := 0; i < rs.dataShard-1; i++ {
 		result[i] = make([]byte, bytesPerShard)
@@ -206,7 +203,7 @@ func (rs *ReedSolomon) computePShard(dataShards [][]byte) ([]byte, error) {
 	if len(dataShards) != rs.dataShard {
 		return nil, errDataShardNumberMismatch
 	}
-	bytesPerShard := rs.bytesPerShard
+	bytesPerShard := len(dataShards[0])
 	pShard := make([]byte, bytesPerShard)
 	waitGroup := sync.WaitGroup{}
 	waitGroup.Add(bytesPerShard)
@@ -226,7 +223,7 @@ func (rs *ReedSolomon) computeQShard(dataShards [][]byte) ([]byte, error) {
 	if len(dataShards) != rs.dataShard {
 		return nil, errDataShardNumberMismatch
 	}
-	bytesPerShard := rs.bytesPerShard
+	bytesPerShard := len(dataShards[0])
 	qShard := make([]byte, bytesPerShard)
 	waitGroup := sync.WaitGroup{}
 	waitGroup.Add(bytesPerShard)
@@ -292,7 +289,7 @@ func (rs *ReedSolomon) recoverTwoShards(dataShards [][]byte, pShard []byte, qSha
 	if len(dataShards) != rs.dataShard {
 		return errDataShardNumberMismatch
 	}
-	bytesPerShard := rs.bytesPerShard
+	bytesPerShard := len(pShard)
 	dataShards[x] = make([]byte, bytesPerShard) // replacing with zero values
 	dataShards[y] = make([]byte, bytesPerShard) // replacing with zero values
 	pxyShard, err := rs.computePShard(dataShards)
